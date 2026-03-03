@@ -1,0 +1,182 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+
+
+datasource db {
+  provider = "postgresql"         // ✅ in v7 keep ONLY the provider here
+  // ❌ Do NOT put `url` or `directUrl` here anymore
+}
+
+
+
+
+
+generator client {
+  provider = "prisma-client"      // v7 generator
+  output   = "./generated/prisma" // pick where the client will be generated
+}
+
+
+
+// ============================================================================
+// CORE MULTI-TENANT TABLES
+// ============================================================================
+
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  subdomain String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users       User[]
+  departments Department[]
+  metrics     Metric[]
+  submissions MonthlySubmission[]
+
+  @@index([subdomain])
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String // bcrypt hashed password
+  role      UserRole @default(STAFF)
+  firstName String?
+  lastName  String?
+  avatar    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Department membership (Department.users)
+  departmentId String?
+  department   Department? @relation("DepartmentUsers", fields: [departmentId], references: [id], onDelete: SetNull)
+
+  // Department head inverse (Department.head)
+  headedDepartments Department[] @relation("DepartmentHead")
+
+  submissions MonthlySubmission[]
+  approvals   ApprovalLog[]
+
+  @@index([tenantId])
+  @@index([departmentId])
+  @@index([role])
+}
+
+model Department {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String
+  headId    String?
+  tenantId  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Department head (User who heads this department)
+  head User? @relation("DepartmentHead", fields: [headId], references: [id], onDelete: SetNull)
+
+  // Department members (Users belonging to this department)
+  users User[] @relation("DepartmentUsers")
+
+  metrics     Metric[]
+  submissions MonthlySubmission[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId])
+  @@index([headId])
+}
+
+// ============================================================================
+// METRICS & REPORTING
+// ============================================================================
+
+model Metric {
+  id         String   @id @default(cuid())
+  key        String // e.g., "active_students", "revenue_mtd", "churn_rate"
+  value      Float // numeric value
+  unit       String? // e.g., "%", "$", "count"
+  month      DateTime // the month this metric is for
+  recordedAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  departmentId String?
+  department   Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, key, month, departmentId])
+  @@index([tenantId])
+  @@index([departmentId])
+  @@index([month])
+}
+
+model MonthlySubmission {
+  id        String           @id @default(cuid())
+  month     DateTime // first day of the month
+  data      Json // structured data for the department submission
+  notes     String?
+  status    SubmissionStatus @default(DRAFT)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  departmentId String
+  department   Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  submittedBy String?
+  user        User?   @relation(fields: [submittedBy], references: [id], onDelete: SetNull)
+
+  approvals ApprovalLog[]
+
+  @@unique([tenantId, departmentId, month])
+  @@index([tenantId])
+  @@index([departmentId])
+  @@index([month])
+  @@index([status])
+}
+
+model ApprovalLog {
+  id        String           @id @default(cuid())
+  status    SubmissionStatus
+  comment   String?
+  createdAt DateTime         @default(now())
+
+  submissionId String
+  submission   MonthlySubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  approvedBy String
+  user       User   @relation(fields: [approvedBy], references: [id], onDelete: Restrict)
+
+  @@index([submissionId])
+  @@index([approvedBy])
+}
+
+// ============================================================================
+// ENUMS
+// ============================================================================
+
+enum UserRole {
+  ADMIN
+  CEO
+  DEPARTMENT_HEAD
+  TEAM_LEAD
+  STAFF
+}
+
+enum SubmissionStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+}
